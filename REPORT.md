@@ -1,215 +1,112 @@
 # Assignment 1 Report
 
-> **✍️ = Manuela writes this part in her own words.** Everything else is the
-> factual record of what the pipeline does and what it produced (numbers come
-> from `artifacts/metrics.json`). Delete every ✍️ line once you've written your
-> answer in its place.
-
-- **Name**: ✍️
-- **Student ID**: ✍️
+- **Name**: Manuela Carreira
+- **Student ID**: 18766
 - **Email**: mcarreira.ieu2022@student.ie.edu
-- **Group**: ✍️ [BBADBA 5A | BBADBA 5B | PPLEDBA 5A | BDBA 3A]
+- **Group**: BBADBA 5A
 
 ## Dataset
 
-**Source.** Inside Airbnb (insideairbnb.com), "Detailed Listings" file for
-Madrid, scraped in June–July 2026. Committed as `data/listings.csv.gz`
-(10 MB) and loaded directly by `train.py`, so every cleaning step is
-reproducible from the raw file.
+The data set comes from a source named insideairbnb.com, it is a data set that has a detailed listing that have all the columns not just the summary version. The dataset has all the listings between June and July 2026, this makes the prices be from this dates. The dataset is inside the repo as data/listings.csv.gz. It is loaded directly by train.py, so every cleaning step can be reproduced from the raw file. 
 
-**What a row is.** One Airbnb listing as it appeared on the scrape date.
+Each row in the dataset represents an apartment that was published in the platform. And each column is a characteristic of the post. 
 
-**Size.** 22,708 listings × 90 columns. After scoping to entire homes:
-15,899 listings, of which 13,936 have a price and are used for modelling
-(1,963 have no price and cannot be used to train or evaluate).
+Size: 22,708 listings (rows) and 90 columns. After keeping only entire homes there are 15,899 listings, and 13,936 of them have a price.
 
-**Target.** Nightly price in euros (`price`, stored as text such as
-`"$1,234.00"`), modelled as `log(price)`. Median price €144; 90% of
-listings between €71 and €421; maximum €36,883.
-
-**Why this dataset.**
-✍️ *Why Madrid Airbnb? What makes it interesting to you / why does feature
-engineering matter here (messy amenities text, coordinates, regulation)?*
+I chose this dataset because for me now living in Madrid and finding flats or places to stay is a big topic right now even if it is just for vacation and for the summer. I wanted to see how prices are, regulations etc. 
 
 ## Business / real-life framing
 
-**The decision the model supports.** An overpricing detector for
-entire-home listings in Madrid. The model estimates a listing's *fair*
-nightly price from what the listing is (location, size, amenities, quality,
-rules). A listing is flagged when its actual price is more than X% above
-that fair price.
+Like I mentioned before, prices for housing or flats for short term stays in Madrid are a big deal right now, due to the high prices. I made a model that is basically an overpricing detector. It will estimate a listings fair price from what the listing is (all the categories we have). A listing will be flagged (marked as overpriced) if the price goes X% above the "fair" price.
 
-✍️ *Who is the user (a platform trust team? the city council? a consumer
-association?) and what do they do with a flagged listing (manual review,
-warning to host, ...)? Why does it matter?*
+This framing drove three decisions in the pipeline:
 
-**How the framing drove the pipeline.**
-
-| Decision | What was done | ✍️ Why (your reasoning) |
-|---|---|---|
-| Scope | Entire homes only (rooms excluded) | ✍️ |
-| Target definition | `log(price)` instead of `price` | ✍️ *hint: the business rule is a percentage ("X% above fair")* |
-| Split strategy | Grouped by `host_id`: 70/15/15 → 9,303 train / 2,183 validation / 2,450 test listings; no host appears in two sets | ✍️ *hint: one host has 373 listings* |
-| No time-based split | Single snapshot, no history over time | ✍️ |
-| Decision threshold | Flag if actual > fair × (1 + X%); X is a slider in the dashboard (default 50%) together with a cost per manual review | ✍️ *how would you pick X? trade-off between review cost and missed overpricing* |
-| Evaluation metrics | RMSE and R² on log-price (what the model optimises); MAE in € and median % error (what the business reads) | ✍️ |
+- **Target = log(price).** The rule I chose is a price X% above the fair price, so the model predicts the logarithm of the price, which turns its errors into percentage errors.
+- **Split by host.** One host has 373 almost identical listings. If they fall into both the training and the test set, the model is "cheating", so all listings of a host go to the same set (train, validation or test).
+- **No time-based split.** The data is a single snapshot from June–July 2026, not a history over time, so there is no future to leak into the training data.
 
 ## Data preparation & feature engineering
 
-**Cleaning and data-quality decisions**
+In the dataset the price came written as text and not as a number, so I converted it to a number. Also listings that came without a price were eliminated. Without price it is impossible to classify the listing as fair or overpriced. Extreme prices were kept, the detector searches for these extreme cases. The cost of this decision is that some of them could actually be typos and not real prices. 
 
-- Price parsed from text (`"$1,234.00"` → 1234.0). Rows without a price dropped.
-- **Extreme prices kept** (e.g. a 1-bedroom listed at €15,000/night).
-  ✍️ *Why did you decide to keep them, and what is the cost of that choice?*
-- 12 host columns are 100% empty in this scrape (response rate, host since,
-  instant bookable, ...) and could not be used.
-- `bathrooms` is missing for ~9% of rows; filled from the text column
-  `bathrooms_text` ("1.5 baths").
-- Remaining missing numeric values filled with the **training-set median**.
-  Missing review scores happen exactly when a listing has no reviews, so the
-  flag `has_reviews` tells the model the score was imputed.
-- All imputation, scaling and one-hot encoding are **fitted on the training set
-  only** and then applied to validation and test.
+There were 12 columns about the host that were completely empty, so I didn't use them. There were other problems, like for example information about bathrooms was missing in about 9% of the listings, but the information was given in another column (bathrooms_text, e.g. "1.5 baths"), so I recovered it from there. When there was a missing value it was filled with the median of the training data. The listings without reviews do NOT have a rating. I filled their rating with the median of the training data before training, and marked it as "not real" with the binary variable has_reviews (1 = it has reviews, 0 = it does not have reviews). 
 
-**Engineered features** (29 numeric + 2 categorical → 54 columns after one-hot)
+All of the calculations were made only with the training data. Later these same calculations were applied to the validation and test sets. This is so the test works as data that the model never sees. 
 
-| Group | Features | How |
-|---|---|---|
-| Location | `log_dist_to_sol_km`, `district` (21 districts) | km to Puerta del Sol from lat/lon, then log; district one-hot |
-| Size | `accommodates`, `bedrooms`, `beds`, `bathrooms` | bathrooms recovered from text |
-| Property type | 5 common types + "Other" | rare types grouped |
-| Amenities | `n_amenities` + 10 flags: air conditioning, dishwasher, elevator, balcony/terrace, pool, parking, washer, workspace, self check-in | keyword matching over 2,512 different amenity labels (e.g. "Air conditioning" and "AC – split type ductless system" are the same thing) |
-| Rules / legal | `is_monthly_rental` (min. stay ≥ 32 nights), `log_minimum_nights`, `has_license` | 200 listings are monthly rentals (median €56 vs €145) |
-| Host | `is_superhost`, `log_host_listings` | professional vs individual hosts |
-| Reviews / quality | `has_reviews`, `log_n_reviews`, `reviews_per_month`, 4 review scores | |
-| Demand | `availability_365`, `estimated_occupancy_l365d` | included by decision |
-| **Excluded** | `estimated_revenue_l365d` | computed as price × occupancy → contains the target (leakage) |
+Engineered features: 
+29 numeric + 2 categorical features, which become 54 columns after one-hot encoding (each district and property type becomes its own 0/1 column).
+The 29 variables are numbers like distance, number of beds, number of bathrooms, number of bedrooms, amenities, rules, host, reviews, demand. And the two categorical ones are the district and the type of property (rental unit, condo, loft, serviced apartment, etc.; rooms were excluded).
 
-✍️ *For 2–3 of these features, explain in your own words why you expected them
-to matter for price (e.g. distance to Sol, monthly rentals, amenities).*
-✍️ *Why did you decide to include availability and occupancy, given that an
-overpriced flat tends to stay empty? What is the risk?*
+Location and size. I expected location and size to be the two main drivers of price. I included both the district and the distance to Puerta del Sol to see how strongly location relates to price, and also how location relates to size, since flats in central areas tend to be smaller. Having both in the same model lets it weigh one against the other: for example, whether a very small flat in Salamanca can cost the same as a much bigger one near Sol.
 
-**Did the feature engineering help?** Same Ridge model, same split, scored
-on validation:
+I decided to include availability and occupancy since both are great indicators of how much demand each listing has during these months. The risk is that a very expensive flat tends
+to stay empty, so the model can learn that "empty" goes together with
+"expensive" and raise its fair-price estimate for empty flats. That makes it
+harder for the detector to flag exactly the overpriced listings it should catch.
 
-| Feature set | Validation RMSE (log) |
-|---|---|
-| Raw columns only (accommodates, bedrooms, beds, latitude, longitude) | 0.497 |
-| Engineered features | 0.402 |
-
-✍️ *Interpret this.*
+I excluded estimated_revenue_l365d, because it is calculated as price × occupancy, so it contains the answer (leakage). Together with occupancy, the model could recover the exact price, and the detector would never flag anything.
 
 ## Modeling: three implementations, one model
 
-**Model.** Linear regression with L2 regularisation (Ridge) on
-`log(price)`. ✍️ *Why linear regression (target is continuous)?*
+I used linear regression because I'm predicting a number, the nightly price,
+not a yes/no outcome. Specifically I used Ridge, which adds a small penalty to
+keep the coefficients from growing too large. All three versions were trained
+on the same data and split, and I only tuned the penalty and the learning rate
+on the validation set.
 
-**The three implementations**
-
-1. **scikit-learn** `Ridge(alpha)`: minimises Σ(y − ŷ)² + α·Σw².
-2. **Manual PyTorch loop** (Session 5 pattern): tensors `w`, `b` with
-   `requires_grad=True`, forward pass `X @ w + b`, loss = MSE + λ·Σw²,
-   `loss.backward()`, update inside `torch.no_grad()`, then `.grad.zero_()`.
-   Full-batch gradient descent, 3,000 epochs.
-3. **Standard PyTorch**: `nn.Module` containing `nn.Linear`, `nn.MSELoss`,
-   `torch.optim.Adam`, loop of `zero_grad → forward → backward → step`,
-   3,000 epochs.
-
-So that all three solve **the same problem**, PyTorch uses
-λ = α / n_train (dividing Ridge's sum-of-squares objective by n gives the mean
-squared error plus (α/n)·Σw²). The bias is not penalised in any of the three.
-
-**Tuning (sparingly, on validation only)**
-
-| Hyperparameter | Values tried | Chosen |
-|---|---|---|
-| Ridge α | 0.1, 1, 10, 100, 1000 → val RMSE 0.4020, 0.4020, 0.4022, 0.4031, 0.4076 | 0.1 (λ = 1.07e-5) |
-| LR manual loop | 0.01, 0.05, 0.1 | 0.1 |
-| LR Adam | 0.01, 0.05, 0.1 | 0.05 (0.01 under-fitted: val RMSE ≈ 0.50) |
-
-**Results on the test set (2,450 listings, hosts never seen in training)**
-
-| Model | RMSE (log) | R² (log) | MAE (€) | Median % error |
+| Model | RMSE (log) | R² | MAE (€) | Median % error |
 |---|---|---|---|---|
-| Naive baseline (mean log-price → €156 for everyone) | 0.507 | −0.012 | 68.27 | 32.4% |
-| scikit-learn Ridge | 0.382 | 0.425 | 51.47 | 22.1% |
-| Manual PyTorch loop | 0.382 | 0.424 | 51.56 | 21.9% |
-| Standard PyTorch (nn + optim) | 0.382 | 0.425 | 51.48 | 22.0% |
+| Naive baseline (€156 for all) | 0.507 | −0.01 | 68.3 | 32.4% |
+| scikit-learn Ridge | 0.382 | 0.425 | 51.5 | 22.1% |
+| Manual PyTorch loop | 0.382 | 0.424 | 51.6 | 21.9% |
+| Standard PyTorch (Adam) | 0.382 | 0.425 | 51.5 | 22.0% |
 
-**Do the three agree?**
+All three models clearly beat the naive baseline. scikit-learn and the
+standard PyTorch version (Adam) ended up practically identical. The manual
+loop differed slightly in a few coefficients, mostly in districts with very
+few listings. It fell behind because it used the same step size for every
+coefficient, so the hardest ones hadn't finished moving by the end of
+training. Adam adjusts the step size for each coefficient, so it got much
+closer. Training the manual loop for longer would close the gap.
 
-| Comparison | Max difference in predictions (log) | Max difference in a coefficient |
-|---|---|---|
-| Standard PyTorch vs scikit-learn | 0.017 | 0.013 |
-| Manual PyTorch vs scikit-learn | 0.100 | 0.124 |
-
-Observed facts about the gap:
-- Standard PyTorch (Adam) and scikit-learn match closely.
-- The manual loop's differences are concentrated in the **property-type
-  dummies and the intercept**: e.g. "Entire serviced apartment" 0.161 (manual)
-  vs 0.049 (sklearn), "Other" +0.027 vs −0.097, intercept 4.90 vs 5.00. Also
-  in rare districts (Barajas 0.602 vs 0.658; Moratalaz 0.082 vs 0.118).
-- ~90% of listings are "Entire rental unit", so that dummy and the intercept
-  move almost together; the rare districts have very few listings, so their
-  columns are almost always 0. Both are directions where plain gradient
-  descent receives tiny gradients and moves slowly, while scikit-learn solves
-  the problem exactly and Adam rescales each parameter's step.
-- Despite this, test metrics are almost identical (RMSE 0.3824 vs 0.3822).
-
-✍️ *Explain in your own words why the manual loop hadn't fully converged and
-why Adam got closer. What would you change to make it converge (more epochs?
-a different learning rate?)*
-
-**Most important coefficients** (effect on log-price per 1 standard deviation,
-or versus the reference category: district = Arganzuela, property type =
-Entire condo):
-
-| Feature | Coefficient (sklearn) |
-|---|---|
-| district_Barajas | +0.658 |
-| district_Hortaleza | +0.318 |
-| district_Salamanca | +0.269 |
-| log_minimum_nights | −0.232 |
-| district_Retiro | +0.215 |
-| log_dist_to_sol_km | −0.172 |
-| accommodates | +0.115 |
-| bedrooms | +0.114 |
-| bathrooms | +0.095 |
-| is_monthly_rental | −0.080 |
-
-✍️ *Interpret 2–3 of these. Does anything surprise you (e.g. Barajas, the
-airport district, being the most expensive)?*
-
-**What the detector finds.** At a 50% threshold, 282 of 2,450 test listings
-(11.5%) are flagged; median excess €103/night. Several of the most-flagged
-listings have event names in their titles ("Final Champions Pizarro",
-"Only 4 champions!!", "*Bernabeu Home*", "Stadium transfer").
-✍️ *What does that tell you about what the model can and cannot see?*
+Location matters most, followed by the size of the flat. The further from Sol, the lower the price. Barajas coming out as the most expensive district surprised me because it is not known for an expensive neighborhood.
 
 ## Limitations & next steps
 
-Facts to build on:
-- R² of 0.42: the model explains less than half of the variation in log-price.
-- Extreme prices kept in training (up to €36,883).
-- Regularisation made almost no difference (all α within 0.006 val RMSE).
-- The manual gradient-descent loop was not fully converged on rare categories.
-- `has_pool` showed no raw price difference.
-- Predictions are converted back with exp(log-price), which gives a "typical"
-  (median-like) price rather than the average.
-- Event pricing (football finals, concerts) is invisible to the features.
-- One snapshot: no seasonality.
+**The model only explains part of the price.** Location, size and amenities
+explain less than half of why prices differ, because many things that matter
+aren't in the data. To improve it, I would add photos of the listing and how
+close it is to metro and bus stations or supermarkets.
 
-✍️ *Pick the 3–4 limitations you think matter most, and for each one say
-concretely how you would fix it with more time or data.*
+**Extreme prices include typos.** I kept them on purpose, but some are clearly
+input errors, so the detector flags them as overpriced when they're just
+mistakes. To fix this, I would correct those typos by estimating what the
+listing should really cost based on its other characteristics, like where it
+is and how big it is.
+
+**The model can't see events or seasons.** The data is a single snapshot and
+the model doesn't know when a flat is rented, so a higher price during a
+football final looks like overpricing. To fix this, I would use a calendar of
+prices per date to account for events and seasons.
+
+**The manual loop didn't fully converge.** It used the same step size for
+every coefficient, so some hadn't finished moving by the end of training.
+To fix it, I would train it for more epochs or use a larger learning rate.
 
 ## Generative AI use disclosure
 
-✍️ *Write this honestly in your own words. What happened in practice: Claude
-(Anthropic) helped with environment setup, wrote the code for `train.py` and
-`app.py` (data loading, feature-engineering code, the three training loops,
-saving models, the Gradio dashboard) based on decisions you made (dataset,
-overpricing framing, entire homes only, keeping extreme prices, including
-availability/occupancy, keeping monthly rentals with a flag), and prepared the
-factual parts and tables of this report. The reasoning in the ✍️ sections is
-your own.*
+I used Claude (Anthropic) throughout this assignment. It helped me set up the
+environment (uv, Git, VS Code) and wrote the code for `train.py` and `app.py`:
+loading and cleaning the data, the feature-engineering code, the three
+training implementations, saving the models and the Gradio dashboard. It also
+prepared the factual parts and tables of this report from the pipeline's
+results, explained the concepts I didn't understand (like leakage, log
+transforms and why gradient descent converges slowly), and turned my notes
+into clear English.
+
+The decisions were mine: the dataset, the overpricing-detector framing,
+focusing on entire homes, keeping extreme prices, including availability and
+occupancy, and keeping monthly rentals with a flag. The reasoning in the
+report, such as why the features matter, the limitations and how I would fix
+them, is based on my own answers, which Claude helped me phrase.
+
